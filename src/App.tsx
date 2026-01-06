@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, Unlock, Key, FileText, AlertCircle, Download } from 'lucide-react';
+import { Lock, Unlock, Key, FileText, AlertCircle } from 'lucide-react';
 import { encrypt, decrypt } from './lib/crypto';
 
 function App() {
@@ -51,161 +51,6 @@ function App() {
     } finally {
       setDecryptLoading(false);
     }
-  };
-
-  const downloadPythonFile = () => {
-    const pythonCode = `import os
-import hmac
-import json
-import struct
-import base64
-import hashlib
-import secrets
-from typing import List
-
-# ---------- Parametreler ----------
-PBKDF2_ITER = 200_000
-SALT_LEN = 16
-NONCE_LEN = 12
-KEY_LEN = 32  # 256-bit keys
-
-# ---------- Yardımcılar ----------
-def derive_keys(passphrase: str, salt: bytes) -> (bytes, bytes):
-    """
-    PBKDF2 ile şifrelerden'ten iki ayrı anahtar üretir:
-    - keystream_key (AES/CTR yerine HMAC-DRBG için)
-    - mac_key (HMAC doğrulama)
-    """
-    dk = hashlib.pbkdf2_hmac('sha256', passphrase.encode('utf-8'), salt, PBKDF2_ITER, dklen=KEY_LEN * 2)
-    return dk[:KEY_LEN], dk[KEY_LEN:KEY_LEN*2]
-
-
-def hmac_stream(key: bytes, prefix: bytes):
-    """
-    HMAC-SHA256 tabanlı deterministik "random stream" üretici (counter mode).
-    Kullanım: çıkıştan byte'ları istediğiniz kadar tüketin.
-    """
-    counter = 0
-    while True:
-        ctr_bytes = struct.pack(">Q", counter)  # 8 byte big-endian
-        yield hmac.new(key, prefix + ctr_bytes, hashlib.sha256).digest()
-        counter += 1
-
-
-def make_permutation_from_key(key: bytes, n: int = 256) -> List[int]:
-    """
-    Anahtara dayalı deterministik permütasyon üretir (Fisher-Yates
-    ama random sayılarını HMAC stream'den alır).
-    """
-    perm = list(range(n))
-    stream = hmac_stream(key, b'permute-v1-')  # sabit prefix
-    # Fisher-Yates (ters) — rastgele sayı alma: büyük bir blok alıp mod ile kullan
-    for i in range(n-1, 0, -1):
-        # alacağımız rastgele değeri üret (8 byte'tan fazla -> int)
-        # çektiğimiz blokların yeterli olduğunu garanti etmek için 8 byte kullanıyoruz
-        rnd_block = next(stream)
-        rnd_int = int.from_bytes(rnd_block, 'big')
-        j = rnd_int % (i + 1)
-        perm[i], perm[j] = perm[j], perm[i]
-    return perm
-
-
-def invert_permutation(perm: List[int]) -> List[int]:
-    inv = [0] * len(perm)
-    for i, v in enumerate(perm):
-        inv[v] = i
-    return inv
-
-# ---------- Şifreleme / Çözme ----------
-def encrypt(message: str, passphrase: str) -> str:
-    """
-    Döndürür: base64 encoded JSON string içerir: {salt, nonce, ciphertext (b64), tag (b64)}
-    """
-    salt = os.urandom(SALT_LEN)
-    keystream_key, mac_key = derive_keys(passphrase, salt)
-
-    # deterministik mapping (parolaya bağlı)
-    perm = make_permutation_from_key(keystream_key, 256)
-    # plaintext bytes
-    pt = message.encode('utf-8')
-
-    nonce = os.urandom(NONCE_LEN)
-    ks = hmac_stream(keystream_key, b'ks-' + nonce)  # keystream üreticisi
-    # oluşturulacak XOR keystream'i pt uzunluğunda al
-    keystream_bytes = b''.join(next(ks) for _ in range((len(pt) + 31)//32))[:len(pt)]
-
-    # XOR ile karıştır, sonra mapping uygula
-    xored = bytes([pt[i] ^ keystream_bytes[i] for i in range(len(pt))])
-    ciphertext = bytes([perm[b] for b in xored])  # bijektif dönüşüm uygulandı
-
-    # HMAC doğrulama etiketi: nonce || ciphertext
-    tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
-
-    payload = {
-        "salt": base64.b64encode(salt).decode('ascii'),
-        "nonce": base64.b64encode(nonce).decode('ascii'),
-        "ciphertext": base64.b64encode(ciphertext).decode('ascii'),
-        "tag": base64.b64encode(tag).decode('ascii'),
-    }
-    return base64.b64encode(json.dumps(payload).encode('utf-8')).decode('ascii')
-
-
-def decrypt(package_b64: str, passphrase: str) -> str:
-    """
-    package_b64: encrypt() tarafından üretilen string
-    returns: çözümlenmiş plaintext (str) veya ValueError (eğer doğrulama başarısızsa)
-    """
-    try:
-        raw = base64.b64decode(package_b64)
-        payload = json.loads(raw.decode('utf-8'))
-        salt = base64.b64decode(payload['salt'])
-        nonce = base64.b64decode(payload['nonce'])
-        ciphertext = base64.b64decode(payload['ciphertext'])
-        tag = base64.b64decode(payload['tag'])
-    except Exception as e:
-        raise ValueError("Invalid package format") from e
-
-    keystream_key, mac_key = derive_keys(passphrase, salt)
-
-    # doğrulama
-    expected_tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
-    if not hmac.compare_digest(expected_tag, tag):
-        raise ValueError("Authentication failed (bad passphrase or tampered data)")
-
-    perm = make_permutation_from_key(keystream_key, 256)
-    inv_perm = invert_permutation(perm)
-
-    # apply inverse mapping
-    xored = bytes([inv_perm[b] for b in ciphertext])
-
-    ks = hmac_stream(keystream_key, b'ks-' + nonce)
-    keystream_bytes = b''.join(next(ks) for _ in range((len(xored) + 31)//32))[:len(xored)]
-
-    pt_bytes = bytes([xored[i] ^ keystream_bytes[i] for i in range(len(xored))])
-    return pt_bytes.decode('utf-8')
-
-# ---------- Kullanım örneği ----------
-if __name__ == "__main__":
-    pwd = input("Anahtarınızı Yazınız: ")
-    msg = input("Şifrelenecek metni yazınız: ")
-    packaged = encrypt(msg, pwd)
-    print("\\nŞifrelenmiş/mühürlenmiş metin (kopyalayınız):\\n", packaged)
-
-    # hemen deneme
-    try:
-        plain = decrypt(packaged, pwd)
-        print("\\nÇözülen metin:", plain)
-    except ValueError as e:
-        print("Çözme hatası:", e)
-`;
-
-    const element = document.createElement('a');
-    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(pythonCode));
-    element.setAttribute('download', 'secure_bijective_cipher.py');
-    element.style.display = 'none';
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
   };
 
   return (
@@ -400,15 +245,8 @@ if __name__ == "__main__":
             </div>
           </div>
 
-          <div className="mt-12 text-center space-y-4">
-            <p className="text-sm text-slate-500">Deterministik Anahtar Akışı, Bijektif Dönüşümler ve HMAC ile Güvenli Mesajlaşma Uygulaması | Melisa - Ömer - Tuğkan</p>
-            <button
-              onClick={downloadPythonFile}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-slate-700 hover:bg-slate-800 text-white rounded-lg font-semibold transition-colors shadow-lg"
-            >
-              <Download className="w-5 h-5" />
-              Python Dosyasını İndir
-            </button>
+          <div className="mt-12 text-center text-sm text-slate-500">
+            <p>Deterministik Anahtar Akışı, Bijektif Dönüşümler ve HMAC ile Güvenli Mesajlaşma Uygulaması | Melisa - Ömer - Tuğkan</p>
           </div>
         </div>
       </div>
