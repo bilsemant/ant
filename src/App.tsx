@@ -65,7 +65,7 @@ function App() {
               Güvenli Şifreleme Uygulaması
             </h1>
             <p className="text-slate-600 text-lg">
-              PBKDF2 ve HMAC-SHA256 tabanlı güvenli bijektif şifreleme sistemi
+              Deterministik Anahtar Akışı, Bijektif Dönüşümler ve HMAC ile Güvenli Mesajlaşma Uygulaması 
             </p>
           </div>
 
@@ -246,7 +246,7 @@ function App() {
           </div>
 
           <div className="mt-12 text-center text-sm text-slate-500">
-            <p>200,000 iterasyon PBKDF2 | HMAC-SHA256 | Bijektif şifreleme</p>
+            <p>Deterministik Anahtar Akışı, Bijektif Dönüşümler ve HMAC ile Güvenli Mesajlaşma Uygulaması | Melisa - Ömer - Tuğkan</p>
           </div>
         </div>
       </div>
